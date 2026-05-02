@@ -1,0 +1,41 @@
+name: Mirror to Codeberg (fork → Codeberg)
+
+on:
+  push:
+    branches-ignore:
+      - "w_vcpkg" # 独自ブランチはCodebergから手動でpush、ここでは除外
+      - "w_workflows"
+  schedule:
+    - cron: "0 7 * * *" # 毎日7:00 UTC（upstream syncの1時間後）
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch all branches
+        run: git fetch --all --prune
+
+      - name: Push upstream branches to Codeberg
+        run: |
+          git remote add codeberg https://tyamaguchi:${{ secrets.CODEBERG_TOKEN }}@codeberg.org/tyamaguchi/angband_test.git
+
+          for branch in $(git branch -r | grep 'origin/' | grep -v 'origin/HEAD' | sed 's|origin/||'); do
+            if [ "$branch" = "w_vcpkg" ] || [ "$branch" = "w_workflows" ]; then
+              echo "Skipping own branch: $branch"
+              continue
+            fi
+            echo "Mirroring branch: $branch"
+            git push codeberg "origin/$branch:refs/heads/$branch" --force-with-lease
+          done
+
+          # タグも同期
+          git push codeberg --tags --force
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}

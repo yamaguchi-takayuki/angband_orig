@@ -1,0 +1,39 @@
+name: Sync upstream (angband/angband → fork)
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 毎日6:00 UTC
+  workflow_dispatch: # 手動実行も可能
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream remote and sync
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/angband/angband.git
+          git fetch upstream --prune
+
+          # upstreamの全ブランチをforkに反映（w_vcpkgは除外）
+          for branch in $(git branch -r | grep 'upstream/' | grep -v 'upstream/HEAD' | sed 's|upstream/||'); do
+            if [ "$branch" = "w_vcpkg" ] || [ "$branch" = "w_workflows" ]; then
+              echo "Skipping own branch: $branch"
+              continue
+            fi
+            echo "Syncing branch: $branch"
+            git checkout -B "$branch" "upstream/$branch"
+            git push origin "$branch" --force-with-lease
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
