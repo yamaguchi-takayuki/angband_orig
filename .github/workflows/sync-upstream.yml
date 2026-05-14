@@ -33,7 +33,7 @@ jobs:
             fi
             echo "Syncing branch: $branch"
             git checkout -B "$branch" "upstream/$branch"
-            git push origin "$branch" --force-with-lease
+            git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/yamaguchi-takayuki/angband_orig.git "$branch" --force-with-lease
           done
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
