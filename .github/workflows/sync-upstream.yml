@@ -1,37 +1,24 @@
-name: Sync upstream (angband/angband → fork)
+name: Sync upstream
 
 on:
   schedule:
-    - cron: "0 6 * * *" # 毎日6:00 UTC
-  workflow_dispatch: # 手動実行も可能
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
 jobs:
-  sync-upstream:
+  sync:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout fork
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Add upstream remote and sync
+      - name: Sync fork
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
+          
           git remote add upstream https://github.com/angband/angband.git
-          git fetch upstream --prune
-
-          # upstreamの全ブランチをforkに反映（w_vcpkgは除外）
-          for branch in $(git branch -r | grep 'upstream/' | grep -v 'upstream/HEAD' | sed 's|upstream/||'); do
-            if [ "$branch" = "w_vcpkg" ] || [ "$branch" = "w_workflows" ]; then
-              echo "Skipping own branch: $branch"
-              continue
-            fi
-            echo "Syncing branch: $branch"
-            git checkout -B "$branch" "upstream/$branch"
-            git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/yamaguchi-takayuki/angband_orig.git "$branch" --force-with-lease
-          done
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          git fetch upstream
+          git push origin upstream/master:master --force
