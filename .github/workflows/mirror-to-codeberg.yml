@@ -24,7 +24,6 @@ jobs:
 
       - name: Fetch from Codeberg (initialize remote tracking)
         run: |
-          git remote add codeberg https://tyamaguchi:${{ secrets.CODEBERG_TOKEN }}@codeberg.org/tyamaguchi/angband_test.git
           git fetch codeberg --all --prune 2>/dev/null || true
         continue-on-error: true
 
