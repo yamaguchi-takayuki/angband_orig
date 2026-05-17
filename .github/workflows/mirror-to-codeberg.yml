@@ -24,12 +24,12 @@ jobs:
 
       - name: Fetch from Codeberg (initialize remote tracking)
         run: |
+          git remote add codeberg https://tyamaguchi:${{ secrets.CODEBERG_TOKEN }}@codeberg.org/tyamaguchi/angband_test.git
           git fetch codeberg --all --prune 2>/dev/null || true
         continue-on-error: true
 
       - name: Push upstream branches to Codeberg
         run: |
-          git remote add codeberg https://tyamaguchi:${{ secrets.CODEBERG_TOKEN }}@codeberg.org/tyamaguchi/angband_test.git
 
           for branch in $(git branch -r | grep 'origin/' | grep -v 'origin/HEAD' | sed 's|origin/||'); do
             if [ "$branch" = "w_vcpkg" ] || [ "$branch" = "w_workflows" ]; then
