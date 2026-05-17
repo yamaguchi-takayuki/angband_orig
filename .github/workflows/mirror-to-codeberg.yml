@@ -37,7 +37,7 @@ jobs:
               continue
             fi
             echo "Mirroring branch: $branch"
-            git push codeberg "origin/$branch:refs/heads/$branch" --force-with-lease
+            git push codeberg "origin/$branch:refs/heads/$branch" --force
           done
 
           # タグも同期
