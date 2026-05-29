@@ -47,6 +47,7 @@
 #include "ui-map.h"
 #include "ui-output.h"
 #include "ui-prefs.h"
+#include "ui-signals.h"
 #include "ui-term.h"
 
 #define MAX_SUBWINDOWS \
@@ -352,6 +353,11 @@ struct sdlpui_window {
 
 	/** window has changed and must be redrawn */
 	bool dirty;
+	/**
+	 * when true, window is temporarily not in fullscreen mode because the
+	 * application was stopped
+	 */
+	bool withdrawn_fullscreen;
 
 	/** limiter for frames */
 	Uint32 next_redraw;
@@ -1472,14 +1478,17 @@ static SDL_bool handle_shortcut_editor_key(struct sdlpui_dialog *d,
 	keyboard_event_to_angband_key(e, w->app->kp_as_mod, &ch, &mods);
 	if (ch) {
 		char keypress_desc[40];
+		struct keypress tmp[2];
 
 		SDL_assert(pse->changing_shortcut >= 0
 			&& pse->changing_shortcut < MAX_WINDOWS);
 		w->app->menu_shortcuts[pse->changing_shortcut].type = EVT_KBRD;
 		w->app->menu_shortcuts[pse->changing_shortcut].code = ch;
 		w->app->menu_shortcuts[pse->changing_shortcut].mods = mods;
-		keypress_to_text(keypress_desc, sizeof(keypress_desc),
-			&w->app->menu_shortcuts[pse->changing_shortcut], true);
+		tmp[0] = w->app->menu_shortcuts[pse->changing_shortcut];
+		tmp[1] = KEYPRESS_NULL;
+		keypress_to_text(keypress_desc, sizeof(keypress_desc), tmp,
+			true);
 		sdlpui_change_caption(
 			&pse->shortcut_displays[pse->changing_shortcut],
 			d, w, keypress_desc);
@@ -1505,14 +1514,17 @@ static SDL_bool handle_shortcut_editor_textin(struct sdlpui_dialog *d,
 	textinput_event_to_angband_key(e, w->app->kp_as_mod, &ch, &mods);
 	if (ch) {
 		char keypress_desc[40];
+		struct keypress tmp[2];
 
 		SDL_assert(pse->changing_shortcut >= 0
 			&& pse->changing_shortcut < MAX_WINDOWS);
 		w->app->menu_shortcuts[pse->changing_shortcut].type = EVT_KBRD;
 		w->app->menu_shortcuts[pse->changing_shortcut].code = ch;
 		w->app->menu_shortcuts[pse->changing_shortcut].mods = mods;
-		keypress_to_text(keypress_desc, sizeof(keypress_desc),
-			&w->app->menu_shortcuts[pse->changing_shortcut], true);
+		tmp[0] = w->app->menu_shortcuts[pse->changing_shortcut];
+		tmp[1] = KEYPRESS_NULL;
+		keypress_to_text(keypress_desc, sizeof(keypress_desc), tmp,
+			true);
 		sdlpui_change_caption(
 			&pse->shortcut_displays[pse->changing_shortcut],
 			d, w, keypress_desc);
@@ -2069,8 +2081,12 @@ static void show_shortcut_editor(struct sdlpui_window *w, int x, int y)
 		sdlpui_create_label(&pse->labels[i],
 			format("Window %d menu", i + 1),  SDLPUI_HOR_LEFT);
 		if (w->app->menu_shortcuts[i].type == EVT_KBRD) {
+			struct keypress tmp[2];
+
+			tmp[0] = w->app->menu_shortcuts[i];
+			tmp[1] = KEYPRESS_NULL;
 			keypress_to_text(keypress_desc, sizeof(keypress_desc),
-				&w->app->menu_shortcuts[i], true);
+				tmp, true);
 		} else {
 			(void)my_strcpy(keypress_desc, "None",
 				sizeof(keypress_desc));
@@ -2580,72 +2596,73 @@ static struct sdlpui_dialog *handle_menu_windows(struct sdlpui_control *ctrl,
 	return result;
 }
 
-static void handle_menu_fullscreen(struct sdlpui_control *ctrl,
-		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
+static bool toggle_fullscreen(struct sdlpui_window *window)
 {
 	bool was_fullscreen = (window->flags & SDL_WINDOW_FULLSCREEN_DESKTOP);
 	SDL_Rect tmp_rect;
-
-	sdlpui_popdown_dialog(dlg, window, SDL_TRUE);
+	size_t i;
 
 	SDL_GetWindowSize(window->window, &tmp_rect.w, &tmp_rect.h);
 	SDL_GetWindowPosition(window->window, &tmp_rect.x, &tmp_rect.y);
-	if (!SDL_SetWindowFullscreen(window->window, (was_fullscreen) ?
+
+	if (SDL_SetWindowFullscreen(window->window, (was_fullscreen) ?
 			0 : SDL_WINDOW_FULLSCREEN_DESKTOP)) {
-		/* Succeeded.  Swap cached sizes. */
-		size_t i;
+		return false;
+	}
 
-		window->full_rect = window->stored_rect;
-		window->stored_rect = tmp_rect;
-		for (i = 0; i < N_ELEMENTS(window->subwindows); ++i) {
-			struct subwindow *subwindow = window->subwindows[i];
+	/* Succeeded.  Swap cached sizes. */
+	window->full_rect = window->stored_rect;
+	window->stored_rect = tmp_rect;
+	for (i = 0; i < N_ELEMENTS(window->subwindows); ++i) {
+		struct subwindow *subwindow = window->subwindows[i];
 
-			if (subwindow != NULL) {
-				tmp_rect = subwindow->stored_rect;
-				subwindow->stored_rect = subwindow->full_rect;
-				subwindow->full_rect = tmp_rect;
-				if (!subwindow->full_rect.w
-						|| !subwindow->full_rect.h) {
-					/*
-					 * Nothing configured so far for this
-					 * mode, so use the configuration from
-					 * the other mode.
-					 */
-					subwindow->full_rect =
-						subwindow->stored_rect;
-				} else if (subwindow->full_rect.w
-						!= subwindow->stored_rect.w
-						|| subwindow->full_rect.h
-						!= subwindow->stored_rect.h) {
-					subwindow->sizing_rect =
-						subwindow->full_rect;
-					resize_subwindow(subwindow);
-				}
+		if (subwindow != NULL) {
+			tmp_rect = subwindow->stored_rect;
+			subwindow->stored_rect = subwindow->full_rect;
+			subwindow->full_rect = tmp_rect;
+			if (!subwindow->full_rect.w
+					|| !subwindow->full_rect.h) {
+				/*
+				 * Nothing configured so far for this mode, so
+				 * use the configuration from the other mode.
+				 */
+				subwindow->full_rect = subwindow->stored_rect;
+			} else if (subwindow->full_rect.w
+					!= subwindow->stored_rect.w
+					|| subwindow->full_rect.h
+					!= subwindow->stored_rect.h) {
+				subwindow->sizing_rect = subwindow->full_rect;
+				resize_subwindow(subwindow);
 			}
 		}
+	}
+	if (was_fullscreen) {
+		int minw, minh;
 
-		if (was_fullscreen) {
-			int minw, minh;
-
-			get_minimum_window_size(window, &minw, &minh);
-			SDL_SetWindowMinimumSize(window->window, minw, minh);
-			/*
-			 * If there is a previously configured size, use it.
-			 * Otherwise, rely on SDL's default behavior.
-			 */
-			if (window->full_rect.w && window->full_rect.h) {
-				SDL_SetWindowSize(window->window,
-					window->full_rect.w,
-					window->full_rect.h);
-				resize_window(window, window->full_rect.w,
-					window->full_rect.h);
-				SDL_SetWindowPosition(window->window,
-					window->full_rect.x,
-					window->full_rect.y);
-			}
+		get_minimum_window_size(window, &minw, &minh);
+		SDL_SetWindowMinimumSize(window->window, minw, minh);
+		/*
+		 * If there is a previously configured size, use it.
+		 * Otherwise, rely on SDL's default behavior.
+		 */
+		if (window->full_rect.w && window->full_rect.h) {
+			SDL_SetWindowSize(window->window, window->full_rect.w,
+				window->full_rect.h);
+			resize_window(window, window->full_rect.w,
+				window->full_rect.h);
+			SDL_SetWindowPosition(window->window,
+				window->full_rect.x, window->full_rect.y);
 		}
-		window->flags = SDL_GetWindowFlags(window->window);
-	} else {
+	}
+	window->flags = SDL_GetWindowFlags(window->window);
+	return true;
+}
+
+static void handle_menu_fullscreen(struct sdlpui_control *ctrl,
+		struct sdlpui_dialog *dlg, struct sdlpui_window *window)
+{
+	sdlpui_popdown_dialog(dlg, window, SDL_TRUE);
+	if (!toggle_fullscreen(window)) {
 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,
 			"Fullscreen failure",
 			format("Could not change fullscreen setting:\n%s",
@@ -3655,15 +3672,33 @@ static void handle_window_closed(struct my_app *a, struct sdlpui_window *window)
 	}
 }
 
+#ifdef SDLPUI_TRACE_EVENTS
+static const char *fill_window_name(const struct sdlpui_window *w, char *name,
+		size_t name_sz)
+{
+	if (w) {
+		(void)SDL_snprintf(name, name_sz, "index %d%s", w->index,
+			(w->index == MAIN_WINDOW) ? " (main)" : "");
+	} else {
+		(void)SDL_strlcpy(name, "NULL", name_sz);
+	}
+	return name;
+}
+#endif
+
 static void handle_window_focus(struct my_app *a, const SDL_WindowEvent *event)
 {
 	struct sdlpui_window *new_w;
+#ifdef SDLPUI_TRACE_EVENTS
+	char name[24];
+#endif
 
 	switch (event->event) {
 		case SDL_WINDOWEVENT_ENTER:
 			new_w = get_window_by_id(a, event->windowID);
 			SDLPUI_EVENT_TRACER("window", new_w,
-				"(not extracted)", "mouse entered");
+				fill_window_name(new_w, name, sizeof(name)),
+				"mouse entered");
 			if (a->w_mouse && a->w_mouse->index != new_w->index
 					&& a->w_mouse->d_mouse) {
 				if (a->w_mouse->d_mouse->ftb->handle_window_loses_mouse) {
@@ -3677,7 +3712,8 @@ static void handle_window_focus(struct my_app *a, const SDL_WindowEvent *event)
 			break;
 		case SDL_WINDOWEVENT_LEAVE:
 			SDLPUI_EVENT_TRACER("window", a->w_mouse,
-				"(not extracted)", "mouse left");
+				fill_window_name(a->w_mouse, name,
+				sizeof(name)), "mouse left");
 			if (a->w_mouse && a->w_mouse->d_mouse) {
 				if (a->w_mouse->d_mouse->ftb->handle_window_loses_mouse) {
 					(*a->w_mouse->d_mouse->ftb->handle_window_loses_mouse)(
@@ -3691,7 +3727,8 @@ static void handle_window_focus(struct my_app *a, const SDL_WindowEvent *event)
 		case SDL_WINDOWEVENT_FOCUS_GAINED:
 			new_w = get_window_by_id(a, event->windowID);
 			SDLPUI_EVENT_TRACER("window", new_w,
-				"(not extracted)", "gained key focus");
+				fill_window_name(new_w, name, sizeof(name)),
+				"gained key focus");
 			if (a->w_key && a->w_key->index != new_w->index
 					&& a->w_key->d_key) {
 				if (a->w_key->d_key->ftb->handle_window_loses_key) {
@@ -3704,7 +3741,8 @@ static void handle_window_focus(struct my_app *a, const SDL_WindowEvent *event)
 			break;
 		case SDL_WINDOWEVENT_FOCUS_LOST:
 			SDLPUI_EVENT_TRACER("window", a->w_key,
-				"(not extracted)", "lost key focus");
+				fill_window_name(a->w_key, name, sizeof(name)),
+				"lost key focus");
 			if (a->w_key && a->w_key->d_key) {
 				if (a->w_key->d_key->ftb->handle_window_loses_key) {
 					(*a->w_key->d_key->ftb->handle_window_loses_key)(
@@ -4730,6 +4768,9 @@ static errr term_xtra_event(int v)
 	if (v) {
 		while (true) {
 			for (int i = 0; i < DEFAULT_IDLE_UPDATE_PERIOD; i++) {
+				if (terms_suspending) {
+					signals_perform_deferred_suspend();
+				}
 				if (get_event(subwindow->app)) {
 					return 0;
 				}
@@ -4741,6 +4782,9 @@ static errr term_xtra_event(int v)
 			idle_update();
 		}
 	} else {
+		if (terms_suspending) {
+			signals_perform_deferred_suspend();
+		}
 		(void) get_event(subwindow->app);
 	}
 
@@ -4804,6 +4848,37 @@ static errr term_xtra_react(void)
 	return 0;
 }
 
+static errr term_xtra_alive(int v)
+{
+	unsigned i;
+
+	if (v) {
+		/* Resuming:  if we were fullscreen, go back to that */
+		for (i = 0; i < MAX_WINDOWS; ++i) {
+			struct sdlpui_window *w = get_window_direct(&g_app, i);
+
+			if (w && w->window && w->withdrawn_fullscreen) {
+				if (toggle_fullscreen(w)) {
+					w->withdrawn_fullscreen = false;
+				}
+			}
+		}
+	} else {
+		/* Suspending:  if we are fullscreen, withdraw from that */
+		for (i = 0; i < MAX_WINDOWS; ++i) {
+			struct sdlpui_window *w = get_window_direct(&g_app, i);
+
+			if (w && w->window && (w->flags
+					& SDL_WINDOW_FULLSCREEN_DESKTOP)) {
+				if (toggle_fullscreen(w)) {
+					w->withdrawn_fullscreen = true;
+				}
+			}
+		}
+	}
+	return 0;
+}
+
 static errr term_xtra_hook(int n, int v)
 {
 	switch (n) {
@@ -4819,6 +4894,8 @@ static errr term_xtra_hook(int n, int v)
 			return term_xtra_fresh();
 		case TERM_XTRA_REACT:
 			return term_xtra_react();
+		case TERM_XTRA_ALIVE:
+			return term_xtra_alive(v);
 		default:
 			return 0;
 	}
@@ -6362,6 +6439,7 @@ static void wipe_window(struct sdlpui_window *window, int display)
 	window->graphics.id = GRAPHICS_NONE;
 
 	window->dirty = true;
+	window->withdrawn_fullscreen = false;
 
 	window->config = NULL;
 	window->inited = true;
@@ -7508,12 +7586,16 @@ static void dump_config_file(const struct my_app *a)
 		}
 	}
 	for (size_t i = 0; i < N_ELEMENTS(a->menu_shortcuts); i++) {
-		char keypress[1024];
+		char keypress[40];
 
 		if (a->menu_shortcuts[i].type == EVT_KBRD
 				&& a->menu_shortcuts[i].code) {
-			keypress_to_text(keypress, sizeof(keypress),
-				a->menu_shortcuts + i, false);
+			struct keypress tmp[2];
+
+			tmp[0] = a->menu_shortcuts[i];
+			tmp[1] = KEYPRESS_NULL;
+			keypress_to_text(keypress, sizeof(keypress), tmp,
+				false);
 		} else {
 			my_strcpy(keypress, "None", sizeof(keypress));
 		}
