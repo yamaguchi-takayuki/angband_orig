@@ -1,6 +1,10 @@
 name: Mirror to Codeberg (fork → Codeberg)
 
 on:
+  workflow_run: 
+    workflows: ["Sync upstream"]
+    types: 
+      - completed
   push:
     branches-ignore:
       - "w_vcpkg" # 独自ブランチはCodebergから手動でpush、ここでは除外
